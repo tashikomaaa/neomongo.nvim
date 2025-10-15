@@ -178,6 +178,17 @@ local function doc_summary(doc)
     return json
 end
 
+local function id_signature(id)
+    if id == nil then
+        return nil
+    end
+    local ok, json = pcall(vim.fn.json_encode, id)
+    if ok and json then
+        return json
+    end
+    return tostring(id)
+end
+
 local function fetch_collection(uri, db, coll)
     local key = cache_key(uri, db, coll)
     if collection_cache[key] then
@@ -246,15 +257,80 @@ local function send_docs_to_db(meta, docs)
         return false, "Impossible d'encoder les documents modifiés."
     end
 
-    local script = ([[
+    local script = ([=[
 const docs = EJSON.parse(%s);
 const database = db.getSiblingDB(%s);
 const collection = database.getCollection(%s);
+const uniqueIndexes = collection.getIndexes().filter((index) => {
+  if (!index || !index.unique) { return false; }
+  const keys = index.key || {};
+  return Object.keys(keys).length > 0;
+});
+
+function normalizeId(value) {
+  if (value == null) { return value; }
+  if (typeof value === "object") {
+    if (value._bsontype === "ObjectId") {
+      return value;
+    }
+    if (value.$oid && typeof value.$oid === "string" && ObjectId.isValid(value.$oid)) {
+      return new ObjectId(value.$oid);
+    }
+  } else if (typeof value === "string" && ObjectId.isValid(value)) {
+    return new ObjectId(value);
+  }
+  return value;
+}
+
+function getValueByPath(source, path) {
+  if (!source) { return undefined; }
+  const parts = path.split(".");
+  let current = source;
+  for (let i = 0; i < parts.length; i++) {
+    if (current == null) { return undefined; }
+    current = current[parts[i]];
+  }
+  return current;
+}
+
+function findExistingByUnique(doc) {
+  for (let i = 0; i < uniqueIndexes.length; i++) {
+    const index = uniqueIndexes[i];
+    const keys = Object.keys(index.key || {});
+    if (!keys.length) { continue; }
+    const query = {};
+    let valid = true;
+    for (let j = 0; j < keys.length; j++) {
+      const field = keys[j];
+      const value = getValueByPath(doc, field);
+      if (value === undefined) {
+        valid = false;
+        break;
+      }
+      query[field] = value;
+    }
+    if (!valid) { continue; }
+    const found = collection.findOne(query);
+    if (found) {
+      return found;
+    }
+  }
+  return null;
+}
+
 docs.forEach((doc) => {
   if (!doc._id) { throw new Error("Chaque document doit contenir un champ _id"); }
-  const existing = collection.findOne({ _id: doc._id });
+  const normalizedId = normalizeId(doc._id);
+  let existing = normalizedId !== undefined ? collection.findOne({ _id: normalizedId }) : null;
   if (!existing) {
-    collection.insertOne(doc);
+    existing = findExistingByUnique(doc);
+  }
+  if (!existing) {
+    const newDoc = Object.assign({}, doc);
+    if (normalizedId !== undefined) {
+      newDoc._id = normalizedId;
+    }
+    collection.insertOne(newDoc);
     return;
   }
   const toSet = Object.assign({}, doc);
@@ -274,11 +350,11 @@ docs.forEach((doc) => {
     update.$unset = toUnset;
   }
   if (Object.keys(update).length) {
-    collection.updateOne({ _id: doc._id }, update);
+    collection.updateOne({ _id: existing._id }, update);
   }
 });
 print("NEOMONGO_SAVE_OK");
-]]):format(js_string(payload), js_string(meta.db), js_string(meta.coll))
+]=]):format(js_string(payload), js_string(meta.db), js_string(meta.coll))
 
     local cmd = string.format(
         "mongosh %s --quiet --eval %s",
@@ -310,6 +386,20 @@ local function update_cache_after_save(meta, docs)
     end
     entry.error = false
     entry.docs = docs
+    entry.message = nil
+end
+
+local function update_cache_document(meta, doc)
+    local key = cache_key(meta.uri, meta.db, meta.coll)
+    local entry = collection_cache[key]
+    if not entry or type(entry.docs) ~= "table" then
+        return
+    end
+    local index = meta.index or meta.doc_index
+    if index and entry.docs[index] then
+        entry.docs[index] = doc
+    end
+    entry.error = false
     entry.message = nil
 end
 
@@ -352,6 +442,51 @@ local function save_collection_buffer(bufnr, meta)
     pcall(vim.api.nvim_exec_autocmds, "BufWritePost", { buffer = bufnr })
 end
 
+local function save_document_buffer(bufnr, meta)
+    local doc_info = {
+        index = meta.index,
+        id = format_id(meta.doc_id),
+        label = string.format("Document #%d", meta.index or 0),
+    }
+    set_json_buffer_options(bufnr)
+    apply_header_virtual(bufnr, meta.display_name, meta.db, meta.coll, meta.uri, doc_info)
+    local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+    local content = table.concat(lines, "\n")
+    local ok, decoded = pcall(vim.fn.json_decode, content)
+    if not ok or type(decoded) ~= "table" or vim.tbl_islist(decoded) then
+        vim.notify("Neomongo: le document doit être un objet JSON valide.", vim.log.levels.ERROR)
+        return
+    end
+    if decoded._id == nil then
+        vim.notify("Neomongo: le document doit contenir un champ _id.", vim.log.levels.ERROR)
+        return
+    end
+
+    local new_signature = id_signature(decoded._id)
+    if meta.doc_signature and new_signature ~= meta.doc_signature then
+        vim.notify("Neomongo: modification de _id non prise en charge dans l'éditeur de document.", vim.log.levels.ERROR)
+        return
+    end
+
+    local success, message = send_docs_to_db(meta, { decoded })
+    if not success then
+        vim.notify("Neomongo: échec de la sauvegarde du document - " .. tostring(message), vim.log.levels.ERROR)
+        return
+    end
+
+    update_cache_document(meta, decoded)
+    vim.notify(string.format("Neomongo: document #%d mis à jour.", meta.index or 0), vim.log.levels.INFO)
+
+    local root_opts = meta.root_opts or { uri = meta.uri, connection_name = meta.display_name }
+    vim.api.nvim_buf_set_option(bufnr, "modified", false)
+    vim.schedule(function()
+        if vim.api.nvim_buf_is_valid(bufnr) then
+            pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
+        end
+        M.open(root_opts)
+    end)
+end
+
 local function ensure_save_autocmd()
     if M._save_group then
         return
@@ -364,7 +499,11 @@ local function ensure_save_autocmd()
             if not ok then
                 return
             end
-            save_collection_buffer(args.buf, meta)
+            if meta.mode == "document" then
+                save_document_buffer(args.buf, meta)
+            else
+                save_collection_buffer(args.buf, meta)
+            end
         end,
     })
     M._save_group = group
@@ -392,7 +531,7 @@ local function get_collection_preview_lines(uri, db, coll, display_name)
     return lines, "text"
 end
 
-local function open_collection_editor(uri, display_name, db, coll)
+local function open_collection_editor(uri, display_name, db, coll, root_opts)
     log("open_collection_editor: " .. db .. "." .. coll)
     local entry = fetch_collection(uri, db, coll)
     local buf = vim.api.nvim_create_buf(false, true)
@@ -419,6 +558,8 @@ local function open_collection_editor(uri, display_name, db, coll)
             display_name = display_name,
             db = db,
             coll = coll,
+            mode = "collection",
+            root_opts = root_opts,
         })
         vim.api.nvim_buf_set_name(buf, string.format("neomongo://%s/%s", db, coll))
         vim.api.nvim_buf_set_option(buf, "modified", false)
@@ -453,19 +594,35 @@ local function get_document_preview_lines(uri, display_name, db, coll, doc_entry
     return lines
 end
 
-local function open_document_detail(uri, display_name, db, coll, doc_entry)
+local function open_document_detail(uri, display_name, db, coll, doc_entry, root_opts)
+    ensure_save_autocmd()
     local buf = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_buf_set_option(buf, "bufhidden", "wipe")
-    vim.api.nvim_buf_set_option(buf, "buftype", "nofile")
+    vim.api.nvim_buf_set_option(buf, "buftype", "acwrite")
     vim.api.nvim_buf_set_option(buf, "swapfile", false)
+    vim.api.nvim_buf_set_option(buf, "modifiable", true)
     local json = pretty_json(doc_entry.doc or {})
     local lines = vim.split(json, "\n", { plain = true })
     set_buf_content(buf, lines, "json")
+    set_json_buffer_options(buf)
+    vim.api.nvim_buf_set_option(buf, "modifiable", true)
+    vim.api.nvim_buf_set_option(buf, "modified", false)
     vim.api.nvim_buf_set_name(buf, string.format("neomongo://%s/%s#%d", db, coll, doc_entry.index))
     apply_header_virtual(buf, display_name, db, coll, uri, {
         index = doc_entry.index,
         id = format_id(doc_entry.doc and doc_entry.doc._id),
         label = string.format("Document #%d", doc_entry.index),
+    })
+    vim.api.nvim_buf_set_var(buf, "neomongo_meta", {
+        uri = uri,
+        display_name = display_name,
+        db = db,
+        coll = coll,
+        mode = "document",
+        index = doc_entry.index,
+        doc_id = doc_entry.doc and doc_entry.doc._id,
+        doc_signature = id_signature(doc_entry.doc and doc_entry.doc._id),
+        root_opts = root_opts,
     })
 
     local width = math.floor(vim.o.columns * 0.6)
@@ -481,7 +638,7 @@ local function open_document_detail(uri, display_name, db, coll, doc_entry)
     })
 end
 
-local function open_document_picker(uri, display_name, db, coll)
+local function open_document_picker(uri, display_name, db, coll, root_opts)
     local entry = fetch_collection(uri, db, coll)
     if entry.error then
         vim.notify("Neomongo: impossible de charger la collection " .. db .. "." .. coll, vim.log.levels.ERROR)
@@ -547,18 +704,18 @@ local function open_document_picker(uri, display_name, db, coll)
         attach_mappings = function(prompt_bufnr, map)
             map("i", "<C-e>", function()
                 actions.close(prompt_bufnr)
-                open_collection_editor(uri, display_name, db, coll)
+                open_collection_editor(uri, display_name, db, coll, root_opts)
             end)
             map("n", "<C-e>", function()
                 actions.close(prompt_bufnr)
-                open_collection_editor(uri, display_name, db, coll)
+                open_collection_editor(uri, display_name, db, coll, root_opts)
             end)
 
             actions.select_default:replace(function()
                 local doc_entry = action_state.get_selected_entry()
                 actions.close(prompt_bufnr)
                 if doc_entry then
-                    open_document_detail(uri, display_name, db, coll, doc_entry)
+                    open_document_detail(uri, display_name, db, coll, doc_entry, root_opts)
                 end
             end)
             return true
@@ -576,9 +733,11 @@ function M.open(opts)
 
     local uri = opts
     local display_name
+    local root_opts
     if type(opts) == "table" then
         uri = opts.uri or opts[1]
         display_name = opts.display_name or opts.connection_name or opts.name or opts.label or opts.title or uri
+        root_opts = vim.deepcopy(opts)
     end
 
     if not uri or uri == "" then
@@ -587,6 +746,12 @@ function M.open(opts)
     end
 
     display_name = display_name or uri
+    if not root_opts then
+        root_opts = {}
+    end
+    root_opts.uri = uri
+    root_opts.connection_name = root_opts.connection_name or display_name
+    root_opts.display_name = root_opts.display_name or display_name
 
     local dbs = get_dbs(uri)
     local results = {}
@@ -655,7 +820,7 @@ function M.open(opts)
                 local entry = action_state.get_selected_entry()
                 actions.close(prompt_bufnr)
                 if entry and entry.type == "collection" then
-                    open_collection_editor(uri, display_name, entry.db, entry.coll)
+                    open_collection_editor(uri, display_name, entry.db, entry.coll, root_opts)
                 end
             end
             map("i", "<C-e>", function()
@@ -668,7 +833,7 @@ function M.open(opts)
                 actions.close(prompt_bufnr)
                 local entry = action_state.get_selected_entry()
                 if entry.type == "collection" then
-                    open_document_picker(uri, display_name, entry.db, entry.coll)
+                    open_document_picker(uri, display_name, entry.db, entry.coll, root_opts)
                 end
             end)
             return true
