@@ -4,6 +4,127 @@ local state = require("neomongo.dashboard.state")
 local ui = require("neomongo.dashboard.ui")
 local logger = require("neomongo.log").scope("dashboard.pickers")
 
+local field_templates = {
+    {
+        key = "equals",
+        label = "equals value",
+        description = "Match documents where the field equals the provided value.",
+        apply = function(filter, field)
+            filter[field] = ""
+        end,
+    },
+    {
+        key = "$in",
+        label = "$in list",
+        description = "Match when the field value is one of the listed items.",
+        apply = function(filter, field)
+            filter[field] = { ["$in"] = { "" } }
+        end,
+    },
+    {
+        key = "$regex",
+        label = "$regex pattern",
+        description = "Match when the field value satisfies the provided regular expression.",
+        apply = function(filter, field)
+            filter[field] = { ["$regex"] = "" }
+        end,
+    },
+    {
+        key = "$exists",
+        label = "$exists flag",
+        description = "Match when the field exists (true) or not (false).",
+        apply = function(filter, field)
+            filter[field] = { ["$exists"] = true }
+        end,
+    },
+    {
+        key = "$gte",
+        label = "$gte lower bound",
+        description = "Match when the field value is greater than or equal to the provided threshold.",
+        apply = function(filter, field)
+            filter[field] = { ["$gte"] = "" }
+        end,
+    },
+    {
+        key = "$lte",
+        label = "$lte upper bound",
+        description = "Match when the field value is less than or equal to the provided threshold.",
+        apply = function(filter, field)
+            filter[field] = { ["$lte"] = "" }
+        end,
+    },
+}
+
+local root_templates = {
+    {
+        key = "$or",
+        label = "$or array",
+        description = "Match when at least one sub-filter in the array is satisfied.",
+        apply = function(filter)
+            if type(filter["$or"]) ~= "table" or not vim.tbl_islist(filter["$or"]) then
+                filter["$or"] = { {} }
+            end
+        end,
+    },
+    {
+        key = "$and",
+        label = "$and array",
+        description = "Match when all sub-filters in the array are satisfied.",
+        apply = function(filter)
+            if type(filter["$and"]) ~= "table" or not vim.tbl_islist(filter["$and"]) then
+                filter["$and"] = { {} }
+            end
+        end,
+    },
+    {
+        key = "$nor",
+        label = "$nor array",
+        description = "Match when none of the sub-filters in the array are satisfied.",
+        apply = function(filter)
+            if type(filter["$nor"]) ~= "table" or not vim.tbl_islist(filter["$nor"]) then
+                filter["$nor"] = { {} }
+            end
+        end,
+    },
+}
+
+local function collect_fields_from_docs(docs)
+    if type(docs) ~= "table" or vim.tbl_isempty(docs) then
+        return {}
+    end
+
+    local seen = {}
+
+    local function visit(value)
+        if type(value) ~= "table" then
+            return
+        end
+        if vim.tbl_islist(value) then
+            for _, item in ipairs(value) do
+                visit(item)
+            end
+        else
+            for key, item in pairs(value) do
+                if type(key) == "string" then
+                    seen[key] = true
+                end
+                visit(item)
+            end
+        end
+    end
+
+    for _, doc in ipairs(docs) do
+        visit(doc)
+    end
+
+    local fields = {}
+    for key, _ in pairs(seen) do
+        fields[#fields + 1] = key
+    end
+    table.sort(fields)
+    return fields
+end
+
 local M = {}
 
 local function get_collection_preview_lines(uri, db, coll, display_name)
@@ -140,6 +261,7 @@ local function open_document_picker(uri, display_name, db, coll, root_opts)
     local previewers = require("telescope.previewers")
 
     local results = {}
+    local field_choices = collect_fields_from_docs(docs)
 
     local function rebuild_results(new_docs)
         docs = new_docs or {}
@@ -150,6 +272,10 @@ local function open_document_picker(uri, display_name, db, coll, root_opts)
                 index = idx,
                 doc = doc,
             }
+        end
+        local collected = collect_fields_from_docs(docs)
+        if not vim.tbl_isempty(collected) then
+            field_choices = collected
         end
     end
 
@@ -166,6 +292,90 @@ local function open_document_picker(uri, display_name, db, coll, root_opts)
                 }
             end,
         })
+    end
+
+    local function build_completion_choices()
+        local items = {}
+        for _, field in ipairs(field_choices) do
+            for _, template in ipairs(field_templates) do
+                items[#items + 1] = {
+                    kind = "field",
+                    field = field,
+                    template = template,
+                    label = string.format('%s • %s', field, template.label),
+                    description = template.description,
+                }
+            end
+        end
+        for _, template in ipairs(root_templates) do
+            items[#items + 1] = {
+                kind = "root",
+                template = template,
+                label = template.label,
+                description = template.description,
+            }
+        end
+        return items
+    end
+
+    local function apply_completion(prompt_bufnr, choice)
+        if not choice then
+            return
+        end
+        local picker = action_state.get_current_picker(prompt_bufnr)
+        if not picker then
+            return
+        end
+        local line = action_state.get_current_line() or ""
+        local trimmed = vim.trim(line)
+        local decoded
+        if trimmed == "" then
+            decoded = {}
+        else
+            local ok, parsed = pcall(vim.fn.json_decode, trimmed)
+            if not ok or type(parsed) ~= "table" or vim.tbl_islist(parsed) then
+                vim.notify("Neomongo: le filtre actuel doit être un objet JSON valide pour l'autocomplétion.", vim.log.levels.ERROR)
+                return
+            end
+            decoded = vim.deepcopy(parsed)
+        end
+
+        if choice.kind == "field" then
+            choice.template.apply(decoded, choice.field)
+        else
+            choice.template.apply(decoded)
+        end
+
+        local ok, encoded = pcall(vim.fn.json_encode, decoded)
+        if not ok or not encoded then
+            vim.notify("Neomongo: impossible de mettre à jour le filtre.", vim.log.levels.ERROR)
+            return
+        end
+
+        if type(picker.set_prompt) == "function" then
+            picker:set_prompt(encoded)
+        elseif type(picker.reset_prompt) == "function" then
+            picker:reset_prompt(encoded)
+        end
+    end
+
+    local function autocomplete_filter(prompt_bufnr)
+        local choices = build_completion_choices()
+        if vim.tbl_isempty(choices) then
+            vim.notify("Neomongo: aucun champ connu pour proposer des suggestions. Exécute d'abord une requête.", vim.log.levels.WARN)
+            return
+        end
+        vim.ui.select(choices, {
+            prompt = "Choisis un modèle de filtre MongoDB",
+            format_item = function(item)
+                if item.description then
+                    return string.format("%s — %s", item.label, item.description)
+                end
+                return item.label
+            end,
+        }, function(choice)
+            apply_completion(prompt_bufnr, choice)
+        end)
     end
 
     rebuild_results(docs)
@@ -261,6 +471,8 @@ local function open_document_picker(uri, display_name, db, coll, root_opts)
             end)
             map("i", "<C-f>", execute_query)
             map("n", "<C-f>", execute_query)
+            map("i", "<C-Space>", autocomplete_filter)
+            map("n", "<C-Space>", autocomplete_filter)
 
             actions.select_default:replace(function()
                 local doc_entry = action_state.get_selected_entry()
