@@ -68,7 +68,7 @@ When `prompt_for_connection` is `true` (default), `:NeomongoDashboard` opens a p
 1. Run `:NeomongoDashboard`.
 2. Pick a connection (if several are defined). The picker lists databases and collections, each prefixed with an icon.
 3. Hover a collection to preview up to 100 documents on the right. Each entry shows a folded one-line JSON summary.
-4. Press `<CR>` on a collection to open a **document picker**: left-hand list of documents, right-hand JSON preview (Tree-sitter folds are enabled when available). Press `<CR>` again to pop a floating window with the selected document; use `<C-e>` to switch to the full editable collection buffer.
+4. Press `<CR>` on a collection to open a **document picker**: left-hand list of documents, right-hand JSON preview (Tree-sitter folds are enabled when available). Press `<CR>` again to pop a floating window with the selected document; edit it directly and hit `:w` to update MongoDB and return to the dashboard, or use `<C-e>` to switch to the full editable collection buffer.
 5. In the editable buffer (`neomongo://db/collection`), update the JSON array and hit `:w`; the plugin validates the JSON and issues insert-or-update commands for each document (documents *must* keep their `_id` field).
 
 > ℹ️ Removing a document from the buffer does **not** delete it remotely. The save routine performs insert or update operations only. Document folding relies on the `nvim-treesitter` JSON parser when available.
