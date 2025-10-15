@@ -210,11 +210,26 @@ local function fetch_collection(uri, db, coll)
     return entry
 end
 
+local function format_id(id)
+    if id == nil then
+        return nil
+    end
+    local t = type(id)
+    if t == "string" or t == "number" or t == "boolean" then
+        return tostring(id)
+    end
+    local ok, json = pcall(vim.fn.json_encode, id)
+    if ok and json then
+        return json
+    end
+    return tostring(id)
+end
+
 local function document_label(index, doc)
     local prefix = string.format("%3d │ ", index)
     local summary = doc_summary(doc)
     if doc and doc._id ~= nil then
-        local id_str = tostring(doc._id)
+        local id_str = format_id(doc._id)
         prefix = prefix .. string.format("[_id=%s] ", id_str)
     end
     return prefix .. summary
@@ -426,7 +441,7 @@ local function get_document_preview_lines(uri, display_name, db, coll, doc_entry
     local doc = doc_entry.doc or {}
     local header = make_header_lines(display_name, db, coll, uri, {
         index = doc_entry.index,
-        id = doc._id,
+        id = format_id(doc._id),
         label = string.format("Document #%d", doc_entry.index),
     })
     local lines = vim.deepcopy(header)
@@ -439,6 +454,8 @@ end
 local function open_document_detail(uri, display_name, db, coll, doc_entry)
     local buf = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_buf_set_option(buf, "bufhidden", "wipe")
+    vim.api.nvim_buf_set_option(buf, "buftype", "nofile")
+    vim.api.nvim_buf_set_option(buf, "swapfile", false)
     vim.api.nvim_buf_set_option(buf, "modifiable", true)
     local json = pretty_json(doc_entry.doc or {})
     local lines = vim.split(json, "\n", { plain = true })
@@ -448,7 +465,7 @@ local function open_document_detail(uri, display_name, db, coll, doc_entry)
     vim.api.nvim_buf_set_name(buf, string.format("neomongo://%s/%s#%d", db, coll, doc_entry.index))
     apply_header_virtual(buf, display_name, db, coll, uri, {
         index = doc_entry.index,
-        id = doc_entry.doc and doc_entry.doc._id,
+        id = format_id(doc_entry.doc and doc_entry.doc._id),
         label = string.format("Document #%d", doc_entry.index),
     })
 
@@ -530,12 +547,10 @@ local function open_document_picker(uri, display_name, db, coll)
         },
         attach_mappings = function(prompt_bufnr, map)
             map("i", "<C-e>", function()
-                local entry_state = action_state.get_selected_entry()
                 actions.close(prompt_bufnr)
                 open_collection_editor(uri, display_name, db, coll)
             end)
             map("n", "<C-e>", function()
-                local entry_state = action_state.get_selected_entry()
                 actions.close(prompt_bufnr)
                 open_collection_editor(uri, display_name, db, coll)
             end)
@@ -637,11 +652,24 @@ function M.open(opts)
             preview_width = 0.55,
         },
         attach_mappings = function(prompt_bufnr, map)
+            local function open_editor()
+                local entry = action_state.get_selected_entry()
+                actions.close(prompt_bufnr)
+                if entry and entry.type == "collection" then
+                    open_collection_editor(uri, display_name, entry.db, entry.coll)
+                end
+            end
+            map("i", "<C-e>", function()
+                open_editor()
+            end)
+            map("n", "<C-e>", function()
+                open_editor()
+            end)
             actions.select_default:replace(function()
                 actions.close(prompt_bufnr)
                 local entry = action_state.get_selected_entry()
                 if entry.type == "collection" then
-                    open_collection_editor(uri, display_name, entry.db, entry.coll)
+                    open_document_picker(uri, display_name, entry.db, entry.coll)
                 end
             end)
             return true
