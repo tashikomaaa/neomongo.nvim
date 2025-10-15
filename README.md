@@ -1,4 +1,4 @@
-![neomongo logo](https://github.com/tashikomaaa/neomongo.nvim/blob/935e76f6139f076efa2d1aeef1cd7a413dda5fd5/assets/logo-full.png)
+![neomongo logo](https://github.com/tashikomaaa/neomongo.nvim/blob/a26f208c2c51a60479c30da5536f06e85c888545/assets/logo-full.png)
 
 **Manage your MongoDB collections straight from Neovim.**
 

@@ -210,6 +210,16 @@ local function fetch_collection(uri, db, coll)
     return entry
 end
 
+local function document_label(index, doc)
+    local prefix = string.format("%3d │ ", index)
+    local summary = doc_summary(doc)
+    if doc and doc._id ~= nil then
+        local id_str = tostring(doc._id)
+        prefix = prefix .. string.format("[_id=%s] ", id_str)
+    end
+    return prefix .. summary
+end
+
 local function js_string(str)
     return string.format("%q", str)
 end
@@ -410,6 +420,136 @@ local function open_collection_editor(uri, display_name, db, coll)
         style = "minimal",
         border = "rounded",
     })
+end
+
+local function get_document_preview_lines(uri, display_name, db, coll, doc_entry)
+    local doc = doc_entry.doc or {}
+    local header = make_header_lines(display_name, db, coll, uri, {
+        index = doc_entry.index,
+        id = doc._id,
+        label = string.format("Document #%d", doc_entry.index),
+    })
+    local lines = vim.deepcopy(header)
+    local json = pretty_json(doc)
+    local json_lines = vim.split(json, "\n", { plain = true })
+    vim.list_extend(lines, json_lines)
+    return lines
+end
+
+local function open_document_detail(uri, display_name, db, coll, doc_entry)
+    local buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_option(buf, "bufhidden", "wipe")
+    vim.api.nvim_buf_set_option(buf, "modifiable", true)
+    local json = pretty_json(doc_entry.doc or {})
+    local lines = vim.split(json, "\n", { plain = true })
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    set_json_buffer_options(buf)
+    vim.api.nvim_buf_set_option(buf, "modifiable", false)
+    vim.api.nvim_buf_set_name(buf, string.format("neomongo://%s/%s#%d", db, coll, doc_entry.index))
+    apply_header_virtual(buf, display_name, db, coll, uri, {
+        index = doc_entry.index,
+        id = doc_entry.doc and doc_entry.doc._id,
+        label = string.format("Document #%d", doc_entry.index),
+    })
+
+    local width = math.floor(vim.o.columns * 0.6)
+    local height = math.floor(vim.o.lines * 0.7)
+    vim.api.nvim_open_win(buf, true, {
+        relative = "editor",
+        width = width,
+        height = height,
+        row = math.floor((vim.o.lines - height) / 2),
+        col = math.floor((vim.o.columns - width) / 2),
+        style = "minimal",
+        border = "rounded",
+    })
+end
+
+local function open_document_picker(uri, display_name, db, coll)
+    local entry = fetch_collection(uri, db, coll)
+    if entry.error then
+        vim.notify("Neomongo: impossible de charger la collection " .. db .. "." .. coll, vim.log.levels.ERROR)
+        return
+    end
+    local docs = entry.docs or {}
+    if vim.tbl_isempty(docs) then
+        vim.notify("Neomongo: collection vide.", vim.log.levels.WARN)
+        return
+    end
+
+    local pickers = require("telescope.pickers")
+    local finders = require("telescope.finders")
+    local conf = require("telescope.config")
+    local actions = require("telescope.actions")
+    local action_state = require("telescope.actions.state")
+    local previewers = require("telescope.previewers")
+
+    local results = {}
+    for idx, doc in ipairs(docs) do
+        table.insert(results, {
+            display = document_label(idx, doc),
+            index = idx,
+            doc = doc,
+        })
+    end
+
+    local previewer = previewers.new_buffer_previewer({
+        title = string.format("%s.%s", db, coll),
+        define_preview = function(self, entry)
+            if not entry or not entry.doc then
+                set_buf_content(self.state.bufnr, {"Sélectionne un document."}, "text")
+                return
+            end
+            local lines = get_document_preview_lines(uri, display_name, db, coll, entry)
+            set_buf_content(self.state.bufnr, lines, "json")
+            set_json_buffer_options(self.state.bufnr)
+        end,
+    })
+
+    pickers.new({}, {
+        prompt_title = string.format("%s.%s — Documents", db, coll),
+        finder = finders.new_table {
+            results = results,
+            entry_maker = function(item)
+                return {
+                    value = item.doc,
+                    display = item.display,
+                    ordinal = item.display,
+                    doc = item.doc,
+                    index = item.index,
+                }
+            end
+        },
+        sorter = conf.values.generic_sorter({}),
+        previewer = previewer,
+        layout_strategy = "horizontal",
+        layout_config = {
+            width = 0.95,
+            height = 0.85,
+            preview_width = 0.6,
+        },
+        attach_mappings = function(prompt_bufnr, map)
+            map("i", "<C-e>", function()
+                local entry_state = action_state.get_selected_entry()
+                actions.close(prompt_bufnr)
+                open_collection_editor(uri, display_name, db, coll)
+            end)
+            map("n", "<C-e>", function()
+                local entry_state = action_state.get_selected_entry()
+                actions.close(prompt_bufnr)
+                open_collection_editor(uri, display_name, db, coll)
+            end)
+
+            actions.select_default:replace(function()
+                local doc_entry = action_state.get_selected_entry()
+                actions.close(prompt_bufnr)
+                if doc_entry then
+                    open_document_detail(uri, display_name, db, coll, doc_entry)
+                end
+            end)
+            return true
+        end,
+    }):find()
 end
 
 function M.open(opts)
