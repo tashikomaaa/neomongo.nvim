@@ -1,3 +1,4 @@
+# neomongo.nvim/lua/neomongo
 ![neomongo logo](https://github.com/tashikomaaa/neomongo.nvim/blob/a26f208c2c51a60479c30da5536f06e85c888545/assets/logo-full.png)
 
 **Manage your MongoDB collections straight from Neovim.**
