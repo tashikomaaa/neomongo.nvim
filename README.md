@@ -9,7 +9,8 @@
 ## 🚀 Features
 
 - 🔭 Telescope dashboard listing databases on the left and collections on the right
-- 🧾 Live JSON preview with an ASCII banner showing the active connection
+- 📚 Collection picker that expands into a document list with live previews
+- 🧾 ASCII banner highlighting the active connection, database, and document metadata
 - ✍️ Editable collection buffers (`:w` writes back to MongoDB using `mongosh`)
 - 🗃️ Connection profiles stored in `~/.config/nvim/neomongo_connections.lua`
 - ⚙️ Simple commands for connecting, listing databases, listing collections, and running ad hoc queries
@@ -66,11 +67,11 @@ When `prompt_for_connection` is `true` (default), `:NeomongoDashboard` opens a p
 
 1. Run `:NeomongoDashboard`.
 2. Pick a connection (if several are defined). The picker lists databases and collections, each prefixed with an icon.
-3. Hover a collection to preview up to 100 documents on the right-hand side. The header banner displays the connection label and URI.
-4. Press `<CR>` on a collection to open it in a floating window. The buffer is named `neomongo://db/collection`, is set to `filetype=json`, and is marked as `acwrite`.
-5. Edit documents directly; `:w` validates the JSON and calls `mongosh` to insert new documents or update existing ones (documents *must* keep their `_id` field).
+3. Hover a collection to preview up to 100 documents on the right. Each entry shows a folded one-line JSON summary.
+4. Press `<CR>` on a collection to open a **document picker**: left-hand list of documents, right-hand JSON preview (Tree-sitter folds are enabled when available). Press `<CR>` again to pop a floating window with the selected document; use `<C-e>` to switch to the full editable collection buffer.
+5. In the editable buffer (`neomongo://db/collection`), update the JSON array and hit `:w`; the plugin validates the JSON and issues insert-or-update commands for each document (documents *must* keep their `_id` field).
 
-> ℹ️ Removing a document from the buffer does **not** delete it remotely. The save routine performs insert or update operations only.
+> ℹ️ Removing a document from the buffer does **not** delete it remotely. The save routine performs insert or update operations only. Document folding relies on the `nvim-treesitter` JSON parser when available.
 
 ### Quick-start alias
 

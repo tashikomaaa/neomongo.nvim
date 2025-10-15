@@ -313,6 +313,7 @@ local function update_cache_after_save(meta, docs)
 end
 
 local function save_collection_buffer(bufnr, meta)
+    set_json_buffer_options(bufnr)
     apply_header_virtual(bufnr, meta.display_name, meta.db, meta.coll, meta.uri)
     local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
     local content = table.concat(lines, "\n")
