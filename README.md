@@ -11,6 +11,7 @@
 
 - 🔭 Telescope dashboard listing databases on the left and collections on the right
 - 📚 Collection picker that expands into a document list with live previews
+- 🔍 Inline JSON filter (press `<C-f>` inside the document picker) to query the current collection without leaving Telescope
 - 🧾 ASCII banner highlighting the active connection, database, and document metadata
 - ✍️ Editable collection buffers (`:w` writes back to MongoDB using `mongosh`)
 - 🗃️ Connection profiles stored in `~/.config/nvim/neomongo_connections.lua`
@@ -90,10 +91,21 @@ When `prompt_for_connection` is `true` (default), `:NeomongoDashboard` opens a p
 1. Run `:NeomongoDashboard`.
 2. Pick a connection (if several are defined). The picker lists databases and collections, each prefixed with an icon.
 3. Hover a collection to preview up to 100 documents on the right. Each entry shows a folded one-line JSON summary.
-4. Press `<CR>` on a collection to open a **document picker**: left-hand list of documents, right-hand JSON preview (Tree-sitter folds are enabled when available). Press `<CR>` again to pop a floating window with the selected document; edit it directly and hit `:w` to update MongoDB and return to the dashboard, or use `<C-e>` to switch to the full editable collection buffer.
+4. Press `<CR>` on a collection to open a **document picker**: left-hand list of documents, right-hand JSON preview (Tree-sitter folds are enabled when available). Type a JSON filter in the Telescope prompt and hit `<C-f>` to re-query the collection (empty prompt reloads the default 100 docs). Press `<CR>` again to pop a floating window with the selected document; edit it directly and hit `:w` to update MongoDB and return to the dashboard, or use `<C-e>` to switch to the full editable collection buffer.
 5. In the editable buffer (`neomongo://db/collection`), update the JSON array and hit `:w`; the plugin validates the JSON and issues insert-or-update commands for each document (documents *must* keep their `_id` field).
 
 > ℹ️ Removing a document from the buffer does **not** delete it remotely. The save routine performs insert or update operations only. Document folding relies on the `nvim-treesitter` JSON parser when available.
+> The editor prettifies JSON automatically; if a document contains extremely long lines Neovim may disable syntax highlighting to keep things responsive.
+
+#### Quick filters from the picker
+
+While the document picker is open, you can narrow the result set without leaving Telescope:
+
+1. Type any valid MongoDB JSON filter (e.g. `{"status":"recruteur"}` or `{"_id":{"$oid":"64f..."}}`) into the prompt.
+2. Press `<C-f>` (insert or normal mode) to execute the query. Up to 200 matching documents are shown; an empty prompt reloads the default unfiltered list.
+3. Continue navigating, editing, or saving as usual.
+
+This uses the same normalization routines as the save path, so `_id` values and unique indexes are handled consistently.
 
 ### Quick-start alias
 

@@ -50,7 +50,7 @@ end
 
 function M.fetch_collection(uri, db, coll)
     local cached = state.get(uri, db, coll)
-    if cached then
+    if cached and not cached.filter then
         return cached
     end
 
@@ -73,7 +73,58 @@ function M.fetch_collection(uri, db, coll)
         return state.set_error(uri, db, coll, result)
     end
 
-    return state.set_docs(uri, db, coll, docs)
+    return state.set(uri, db, coll, {
+        error = false,
+        message = nil,
+        docs = docs,
+        filter = nil,
+    })
+end
+
+function M.query_collection(uri, db, coll, filter, opts)
+    opts = opts or {}
+    local ok, payload = pcall(vim.fn.json_encode, filter or {})
+    if not ok or not payload then
+        return nil, "Impossible d'encoder le filtre JSON."
+    end
+
+    local limit = tonumber(opts.limit) or 100
+    if limit < 1 then
+        limit = 1
+    end
+    limit = math.floor(limit)
+
+    local script = ([[
+const filter = EJSON.parse(%s);
+let cursor = db.getCollection(%s).find(filter);
+const limit = %d;
+if (limit > 0) {
+  cursor = cursor.limit(limit);
+}
+const docs = cursor.toArray();
+print(EJSON.stringify(docs));
+]]):format(js_string(payload), js_string(coll), limit)
+
+    local cmd = string.format(
+        "mongosh %s/%s --quiet --eval %s",
+        vim.fn.shellescape(uri),
+        vim.fn.shellescape(db),
+        vim.fn.shellescape(script)
+    )
+    logger("query_collection CMD: " .. cmd)
+    local result = vim.fn.system(cmd)
+    logger("query_collection Result: " .. tostring(result))
+
+    if vim.v.shell_error ~= 0 then
+        return nil, result
+    end
+
+    local decode_ok, docs = pcall(vim.fn.json_decode, result)
+    if not decode_ok or type(docs) ~= "table" then
+        return nil, result
+    end
+
+    return docs
 end
 
 function M.apply_changes(meta, docs)

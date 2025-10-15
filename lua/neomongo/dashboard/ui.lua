@@ -93,12 +93,30 @@ function M.set_buf_content(bufnr, lines, filetype)
     end
 end
 
+local function should_enable_json_syntax(bufnr)
+    local max_pattern = vim.o.maxmempattern or 2000
+    local limit = math.max(max_pattern - 100, 1000)
+    local ok, lines = pcall(vim.api.nvim_buf_get_lines, bufnr, 0, -1, false)
+    if not ok then
+        return false
+    end
+    for _, line in ipairs(lines) do
+        if #line > limit then
+            return false
+        end
+    end
+    return true
+end
+
 function M.set_json_buffer_options(bufnr)
     if not vim.api.nvim_buf_is_valid(bufnr) then
         return
     end
     pcall(vim.api.nvim_buf_set_option, bufnr, "filetype", "json")
-    pcall(vim.treesitter.start, bufnr, "json")
+    local enable_highlight = should_enable_json_syntax(bufnr)
+    if enable_highlight and vim.treesitter and type(vim.treesitter.start) == "function" then
+        pcall(vim.treesitter.start, bufnr, "json")
+    end
     if vim.fn.exists("*nvim_treesitter#foldexpr") == 1 then
         pcall(vim.api.nvim_buf_set_option, bufnr, "foldmethod", "expr")
         pcall(vim.api.nvim_buf_set_option, bufnr, "foldexpr", "nvim_treesitter#foldexpr()")
@@ -107,19 +125,83 @@ function M.set_json_buffer_options(bufnr)
     end
     pcall(vim.api.nvim_buf_set_option, bufnr, "foldenable", true)
     pcall(vim.api.nvim_buf_set_option, bufnr, "foldlevel", 99)
+    if enable_highlight then
+        pcall(vim.api.nvim_buf_set_option, bufnr, "syntax", "json")
+    else
+        vim.api.nvim_buf_set_var(bufnr, "neomongo_json_syntax_disabled", true)
+    end
+end
+
+local function manual_pretty(json)
+    local indent = 0
+    local result = {}
+    local in_string = false
+    local escaping = false
+
+    for i = 1, #json do
+        local char = json:sub(i, i)
+
+        if escaping then
+            escaping = false
+            table.insert(result, char)
+        elseif char == "\\" then
+            escaping = true
+            table.insert(result, char)
+        elseif char == '"' then
+            in_string = not in_string
+            table.insert(result, char)
+        elseif not in_string then
+            if char == "{" or char == "[" then
+                table.insert(result, char)
+                indent = indent + 1
+                table.insert(result, "\n" .. string.rep("  ", indent))
+            elseif char == "}" or char == "]" then
+                local previous_indent = indent
+                indent = math.max(indent - 1, 0)
+                local expected = "\n" .. string.rep("  ", previous_indent)
+                if result[#result] == expected then
+                    result[#result] = nil
+                end
+                table.insert(result, "\n" .. string.rep("  ", indent) .. char)
+            elseif char == "," then
+                table.insert(result, char)
+                table.insert(result, "\n" .. string.rep("  ", indent))
+            elseif char == ":" then
+                table.insert(result, ": ")
+            elseif not char:match("%s") then
+                table.insert(result, char)
+            end
+        else
+            table.insert(result, char)
+        end
+    end
+
+    return table.concat(result)
 end
 
 function M.pretty_json(obj)
+    -- Try native JSON encoder with indentation when available (Neovim ≥ 0.10)
+    if vim.json and type(vim.json.encode) == "function" then
+        local ok, formatted = pcall(vim.json.encode, obj, { indent = "  ", sort_keys = false })
+        if ok and formatted and formatted ~= "" and formatted:find("\n") then
+            return formatted
+        end
+    end
+
     local ok, json = pcall(vim.fn.json_encode, obj)
     if not ok or not json then
         logger("pretty_json: unable to encode object")
         return "{}"
     end
-    local formatted = vim.fn.system({ "python3", "-m", "json.tool" }, json)
-    if vim.v.shell_error ~= 0 or not formatted or formatted == "" then
-        return json
+
+    if vim.fn.executable("python3") == 1 then
+        local formatted = vim.fn.system({ "python3", "-m", "json.tool" }, json)
+        if vim.v.shell_error == 0 and formatted and formatted ~= "" then
+            return formatted
+        end
     end
-    return formatted
+
+    return manual_pretty(json)
 end
 
 function M.doc_summary(doc)

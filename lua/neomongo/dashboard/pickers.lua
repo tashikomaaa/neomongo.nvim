@@ -1,5 +1,6 @@
 local mongo = require("neomongo.dashboard.mongo")
 local save = require("neomongo.dashboard.save")
+local state = require("neomongo.dashboard.state")
 local ui = require("neomongo.dashboard.ui")
 local logger = require("neomongo.log").scope("dashboard.pickers")
 
@@ -45,8 +46,7 @@ local function open_collection_editor(uri, display_name, db, coll, root_opts)
         save.ensure_autocmd()
         local json = ui.pretty_json(entry.docs)
         local lines = vim.split(json, "\n", { plain = true })
-        vim.api.nvim_buf_set_option(buf, "modifiable", true)
-        vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+        ui.set_buf_content(buf, lines, "json")
         vim.api.nvim_buf_set_option(buf, "buftype", "acwrite")
         vim.api.nvim_buf_set_option(buf, "swapfile", false)
         vim.api.nvim_buf_set_var(buf, "neomongo_meta", {
@@ -58,8 +58,9 @@ local function open_collection_editor(uri, display_name, db, coll, root_opts)
             root_opts = root_opts,
         })
         vim.api.nvim_buf_set_name(buf, string.format("neomongo://%s/%s", db, coll))
-        vim.api.nvim_buf_set_option(buf, "modified", false)
         ui.set_json_buffer_options(buf)
+        vim.api.nvim_buf_set_option(buf, "modifiable", true)
+        vim.api.nvim_buf_set_option(buf, "modified", false)
         ui.apply_header_virtual(buf, display_name, db, coll, uri)
     end
 
@@ -128,8 +129,7 @@ local function open_document_picker(uri, display_name, db, coll, root_opts)
     end
     local docs = entry.docs or {}
     if vim.tbl_isempty(docs) then
-        vim.notify("Neomongo: collection vide.", vim.log.levels.WARN)
-        return
+        vim.notify("Neomongo: collection vide (tu peux exécuter un filtre JSON).", vim.log.levels.WARN)
     end
 
     local pickers = require("telescope.pickers")
@@ -140,13 +140,35 @@ local function open_document_picker(uri, display_name, db, coll, root_opts)
     local previewers = require("telescope.previewers")
 
     local results = {}
-    for idx, doc in ipairs(docs) do
-        table.insert(results, {
-            display = ui.document_label(idx, doc),
-            index = idx,
-            doc = doc,
+
+    local function rebuild_results(new_docs)
+        docs = new_docs or {}
+        results = {}
+        for idx, doc in ipairs(docs) do
+            results[#results + 1] = {
+                display = ui.document_label(idx, doc),
+                index = idx,
+                doc = doc,
+            }
+        end
+    end
+
+    local function make_finder()
+        return finders.new_table({
+            results = results,
+            entry_maker = function(item)
+                return {
+                    value = item.doc,
+                    display = item.display,
+                    ordinal = item.display,
+                    doc = item.doc,
+                    index = item.index,
+                }
+            end,
         })
     end
+
+    rebuild_results(docs)
 
     local previewer = previewers.new_buffer_previewer({
         title = string.format("%s.%s", db, coll),
@@ -161,20 +183,14 @@ local function open_document_picker(uri, display_name, db, coll, root_opts)
         end,
     })
 
+    if not M._query_hint_shown then
+        vim.notify("Neomongo: tape un filtre JSON dans le prompt puis presse <C-f> pour exécuter la requête.", vim.log.levels.INFO)
+        M._query_hint_shown = true
+    end
+
     pickers.new({}, {
         prompt_title = string.format("%s.%s — Documents", db, coll),
-        finder = finders.new_table({
-            results = results,
-            entry_maker = function(item)
-                return {
-                    value = item.doc,
-                    display = item.display,
-                    ordinal = item.display,
-                    doc = item.doc,
-                    index = item.index,
-                }
-            end,
-        }),
+        finder = make_finder(),
         sorter = conf.values.generic_sorter({}),
         previewer = previewer,
         layout_strategy = "horizontal",
@@ -184,6 +200,57 @@ local function open_document_picker(uri, display_name, db, coll, root_opts)
             preview_width = 0.6,
         },
         attach_mappings = function(prompt_bufnr, map)
+            local function execute_query()
+                local picker = action_state.get_current_picker(prompt_bufnr)
+                local line = action_state.get_current_line()
+                line = line or ""
+                local trimmed = line
+                if vim.trim then
+                    trimmed = vim.trim(line)
+                else
+                    trimmed = line:gsub("^%s*(.-)%s*$", "%1")
+                end
+
+                local new_docs
+                if trimmed == "" then
+                    local refreshed = mongo.fetch_collection(uri, db, coll)
+                    if refreshed.error then
+                        vim.notify("Neomongo: impossible de recharger " .. db .. "." .. coll .. " - " .. tostring(refreshed.message), vim.log.levels.ERROR)
+                        return
+                    end
+                    new_docs = refreshed.docs or {}
+                else
+                    local ok, filter = pcall(vim.fn.json_decode, trimmed)
+                    if not ok or type(filter) ~= "table" then
+                        vim.notify("Neomongo: filtre JSON invalide.", vim.log.levels.ERROR)
+                        return
+                    end
+                    local queried, err = mongo.query_collection(uri, db, coll, filter, { limit = 200 })
+                    if not queried then
+                        vim.notify("Neomongo: requête impossible - " .. tostring(err), vim.log.levels.ERROR)
+                        return
+                    end
+                    new_docs = queried
+                end
+
+                rebuild_results(new_docs)
+                if trimmed == "" then
+                    state.set_docs(uri, db, coll, docs)
+                else
+                    state.set(uri, db, coll, {
+                        error = false,
+                        message = nil,
+                        docs = docs,
+                        filter = trimmed,
+                    })
+                end
+                picker:refresh(make_finder(), { reset_prompt = false })
+                if #results > 0 then
+                    picker:set_selection(1)
+                end
+                vim.notify(string.format("Neomongo: %s.%s → %d document(s)", db, coll, #results), vim.log.levels.INFO)
+            end
+
             map("i", "<C-e>", function()
                 actions.close(prompt_bufnr)
                 open_collection_editor(uri, display_name, db, coll, root_opts)
@@ -192,6 +259,8 @@ local function open_document_picker(uri, display_name, db, coll, root_opts)
                 actions.close(prompt_bufnr)
                 open_collection_editor(uri, display_name, db, coll, root_opts)
             end)
+            map("i", "<C-f>", execute_query)
+            map("n", "<C-f>", execute_query)
 
             actions.select_default:replace(function()
                 local doc_entry = action_state.get_selected_entry()

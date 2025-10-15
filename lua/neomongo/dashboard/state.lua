@@ -25,6 +25,7 @@ function M.set_error(uri, db, coll, message)
         error = true,
         message = message,
         docs = nil,
+        filter = nil,
     })
 end
 
@@ -33,6 +34,7 @@ function M.set_docs(uri, db, coll, docs)
         error = false,
         message = nil,
         docs = docs,
+        filter = nil,
     })
 end
 
