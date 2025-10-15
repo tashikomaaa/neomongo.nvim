@@ -110,6 +110,7 @@ local function set_json_buffer_options(bufnr)
         return
     end
     pcall(vim.api.nvim_buf_set_option, bufnr, "filetype", "json")
+    pcall(vim.treesitter.start, bufnr, "json")
     if vim.fn.exists("*nvim_treesitter#foldexpr") == 1 then
         pcall(vim.api.nvim_buf_set_option, bufnr, "foldmethod", "expr")
         pcall(vim.api.nvim_buf_set_option, bufnr, "foldexpr", "nvim_treesitter#foldexpr()")
@@ -457,12 +458,9 @@ local function open_document_detail(uri, display_name, db, coll, doc_entry)
     vim.api.nvim_buf_set_option(buf, "bufhidden", "wipe")
     vim.api.nvim_buf_set_option(buf, "buftype", "nofile")
     vim.api.nvim_buf_set_option(buf, "swapfile", false)
-    vim.api.nvim_buf_set_option(buf, "modifiable", true)
     local json = pretty_json(doc_entry.doc or {})
     local lines = vim.split(json, "\n", { plain = true })
-    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-    set_json_buffer_options(buf)
-    vim.api.nvim_buf_set_option(buf, "modifiable", false)
+    set_buf_content(buf, lines, "json")
     vim.api.nvim_buf_set_name(buf, string.format("neomongo://%s/%s#%d", db, coll, doc_entry.index))
     apply_header_virtual(buf, display_name, db, coll, uri, {
         index = doc_entry.index,
