@@ -1,7 +1,5 @@
 ![neomongo logo](https://github.com/tashikomaaa/neomongo.nvim/blob/a26f208c2c51a60479c30da5536f06e85c888545/assets/logo-full.png)
-<a href="https://dotfyle.com/tashikomaaa/neomongonvim-lua-neomongo"><img src="https://dotfyle.com/tashikomaaa/neomongonvim-lua-neomongo/badges/plugins?style=for-the-badge" /></a>
-<a href="https://dotfyle.com/tashikomaaa/neomongonvim-lua-neomongo"><img src="https://dotfyle.com/tashikomaaa/neomongonvim-lua-neomongo/badges/leaderkey?style=for-the-badge" /></a>
-<a href="https://dotfyle.com/tashikomaaa/neomongonvim-lua-neomongo"><img src="https://dotfyle.com/tashikomaaa/neomongonvim-lua-neomongo/badges/plugin-manager?style=for-the-badge" /></a>
+
 **Manage your MongoDB collections straight from Neovim.**
 
 `neomongo.nvim` offers a lightweight workflow built around a Telescope-powered dashboard where you can explore databases, preview documents, and update collections without leaving your editor.
