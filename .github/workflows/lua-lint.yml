@@ -18,6 +18,7 @@ jobs:
         uses: leafo/gh-actions-lua@v10
         with:
           luaVersion: "5.1"
+          luarocksVersion: "3.9.2"
 
       - name: Install luacheck
         run: luarocks install luacheck
