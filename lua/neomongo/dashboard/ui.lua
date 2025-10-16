@@ -1,9 +1,12 @@
+-- UI primitives responsible for formatting buffers, virtual lines and JSON snippets.
 local logger = require("neomongo.log").scope("dashboard.ui")
 
 local M = {}
 
+-- Namespace used for managing virtual header lines.
 local header_ns = vim.api.nvim_create_namespace("NeomongoDashboardHeader")
 
+-- ASCII art banner rendered above every dashboard buffer.
 local HEADER_ART = {
     "███▄▄▄▄      ▄████████  ▄██████▄    ▄▄▄▄███▄▄▄▄    ▄██████▄  ███▄▄▄▄      ▄██████▄   ▄██████▄  ",
     "███▀▀▀██▄   ███    ███ ███    ███ ▄██▀▀▀███▀▀▀██▄ ███    ███ ███▀▀▀██▄   ███    ███ ███    ███ ",
@@ -21,11 +24,13 @@ local function starts_with(str, prefix)
 end
 
 local function ensure_header_highlight()
+    -- Theme the header lines while tolerating missing highlight groups.
     pcall(vim.api.nvim_set_hl, 0, "NeomongoDashboardHeader", { link = "Title" })
     pcall(vim.api.nvim_set_hl, 0, "NeomongoDashboardHeaderInfo", { link = "NonText" })
 end
 
 local function header_lines_to_virt(lines)
+    -- Convert plain Lua tables into the format expected by `virt_lines`.
     local virt = {}
     for _, line in ipairs(lines) do
         local hl = "NeomongoDashboardHeader"
@@ -40,6 +45,7 @@ local function header_lines_to_virt(lines)
 end
 
 function M.make_header_lines(display_name, db, coll, uri, doc_info)
+    -- Build the contextual header shown above dashboards and document buffers.
     db = db or "?"
     coll = coll or "*"
     local lines = vim.deepcopy(HEADER_ART)
@@ -68,6 +74,7 @@ function M.make_header_lines(display_name, db, coll, uri, doc_info)
 end
 
 function M.apply_header_virtual(buf, display_name, db, coll, uri, doc_info)
+    -- Apply the header as virtual lines so it can float above existing buffer content.
     ensure_header_highlight()
     vim.api.nvim_buf_clear_namespace(buf, header_ns, 0, -1)
     local lines = M.make_header_lines(display_name, db, coll, uri, doc_info)
@@ -79,6 +86,7 @@ function M.apply_header_virtual(buf, display_name, db, coll, uri, doc_info)
 end
 
 function M.set_buf_content(bufnr, lines, filetype)
+    -- Replace buffer content atomically while respecting modifiability flags.
     if not vim.api.nvim_buf_is_valid(bufnr) then
         return
     end
@@ -94,6 +102,7 @@ function M.set_buf_content(bufnr, lines, filetype)
 end
 
 local function should_enable_json_syntax(bufnr)
+    -- Avoid enabling expensive syntax highlight when dealing with very large documents.
     local max_pattern = vim.o.maxmempattern or 2000
     local limit = math.max(max_pattern - 100, 1000)
     local ok, lines = pcall(vim.api.nvim_buf_get_lines, bufnr, 0, -1, false)
@@ -109,6 +118,7 @@ local function should_enable_json_syntax(bufnr)
 end
 
 function M.set_json_buffer_options(bufnr)
+    -- Apply JSON specific options such as folds and Tree-sitter highlighting.
     if not vim.api.nvim_buf_is_valid(bufnr) then
         return
     end
@@ -133,7 +143,9 @@ function M.set_json_buffer_options(bufnr)
 end
 
 local function manual_pretty(json)
+    -- Fallback formatter used when no external tooling is available. Keeps indentation compact.
     local indent = 0
+    -- Store characters gradually to reduce string concatenation overhead.
     local result = {}
     local in_string = false
     local escaping = false
@@ -180,6 +192,7 @@ local function manual_pretty(json)
 end
 
 function M.pretty_json(obj)
+    -- Format Lua tables as JSON trying several strategies, gracefully degrading when needed.
     -- Try native JSON encoder with indentation when available (Neovim ≥ 0.10)
     if vim.json and type(vim.json.encode) == "function" then
         local ok, formatted = pcall(vim.json.encode, obj, { indent = "  ", sort_keys = false })
@@ -205,6 +218,7 @@ function M.pretty_json(obj)
 end
 
 function M.doc_summary(doc)
+    -- Produce a compact description for candidate documents inside the Telescope picker.
     if type(doc) ~= "table" then
         return tostring(doc)
     end
@@ -220,6 +234,7 @@ function M.doc_summary(doc)
 end
 
 function M.format_id(id)
+    -- Provide a printable version of a MongoDB `_id`, supporting BSON style tables.
     if id == nil then
         return nil
     end
@@ -235,6 +250,7 @@ function M.format_id(id)
 end
 
 function M.document_label(index, doc)
+    -- Provide a label that combines the index, optional identifier and JSON preview.
     local prefix = string.format("%3d │ ", index)
     local summary = M.doc_summary(doc)
     if doc and doc._id ~= nil then
@@ -245,6 +261,7 @@ function M.document_label(index, doc)
 end
 
 function M.id_signature(id)
+    -- Serialize identifiers so we can detect edits and prevent accidental replacements.
     if id == nil then
         return nil
     end
@@ -256,6 +273,7 @@ function M.id_signature(id)
 end
 
 function M.document_preview_lines(display_name, uri, db, coll, doc_entry)
+    -- Compose the lines shown in the preview window when highlighting a document.
     local doc = doc_entry.doc or {}
     local header = M.make_header_lines(display_name, db, coll, uri, {
         index = doc_entry.index,

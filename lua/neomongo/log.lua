@@ -1,8 +1,10 @@
+-- Small synchronous logger that writes diagnostic information to `neomongo.log`.
 local M = {}
 
 local log_path
 
 local function resolve_log_path()
+    -- Lazily resolve the log file path relative to the project root.
     if log_path then
         return log_path
     end
@@ -16,6 +18,7 @@ local function resolve_log_path()
 end
 
 local function write_line(scope, message)
+    -- Append a single formatted line to the log file with an optional scope.
     local path = resolve_log_path()
     local ok, file = pcall(io.open, path, "a")
     if not ok or not file then
@@ -30,6 +33,7 @@ local function write_line(scope, message)
 end
 
 function M.write(scope, message)
+    -- Convenience wrapper supporting `write("message")` and `write("scope", "message")`.
     if not message then
         message = scope
         scope = nil
@@ -38,6 +42,7 @@ function M.write(scope, message)
 end
 
 function M.scope(scope_name)
+    -- Provide a dedicated logger function bound to a specific logical scope.
     return function(message)
         write_line(scope_name, tostring(message))
     end

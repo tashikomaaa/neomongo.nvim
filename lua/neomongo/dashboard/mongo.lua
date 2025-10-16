@@ -1,13 +1,16 @@
+-- MongoDB facing helpers that power the dashboard pickers and editors.
 local logger = require("neomongo.log").scope("dashboard.mongo")
 local state = require("neomongo.dashboard.state")
 
 local M = {}
 
 local function js_string(str)
+    -- Quote Lua strings so they are safe to inject inside mongosh snippets.
     return string.format("%q", str)
 end
 
 function M.list_databases(uri)
+    -- Retrieve the list of databases through mongosh and decode the JSON payload.
     logger("list_databases: uri=" .. tostring(uri))
     local cmd = string.format(
         'mongosh %s --quiet --eval "JSON.stringify(db.adminCommand({ listDatabases: 1 }))"',
@@ -28,6 +31,7 @@ function M.list_databases(uri)
 end
 
 function M.list_collections(uri, db)
+    -- Fetch raw collection names for the given database.
     logger(string.format("list_collections: %s/%s", tostring(uri), tostring(db)))
     local cmd = string.format(
         'mongosh %s/%s --quiet --eval "JSON.stringify(db.getCollectionNames())"',
@@ -49,13 +53,14 @@ function M.list_collections(uri, db)
 end
 
 function M.fetch_collection(uri, db, coll)
+    -- Load up to 100 documents for a collection and cache the result for quick previews.
     local cached = state.get(uri, db, coll)
     if cached and not cached.filter then
         return cached
     end
 
     local cmd = string.format(
-        'mongosh %s/%s --quiet --eval "JSON.stringify(db.getCollection(\'%s\').find().limit(100).toArray())"',
+        "mongosh %s/%s --quiet --eval \"JSON.stringify(db.getCollection('%s').find().limit(100).toArray())\"",
         uri,
         db,
         coll
@@ -82,6 +87,7 @@ function M.fetch_collection(uri, db, coll)
 end
 
 function M.query_collection(uri, db, coll, filter, opts)
+    -- Execute an ad-hoc query using the provided JSON filter and return decoded documents.
     opts = opts or {}
     local ok, payload = pcall(vim.fn.json_encode, filter or {})
     if not ok or not payload then
@@ -128,6 +134,8 @@ print(EJSON.stringify(docs));
 end
 
 function M.apply_changes(meta, docs)
+    -- Apply batch edits by invoking mongosh and letting MongoDB merge the documents.
+    -- The script tries to smartly upsert documents while preserving unique indexes.
     local ok, payload = pcall(vim.fn.json_encode, docs)
     if not ok or not payload then
         return false, "Impossible d'encoder les documents modifiés."
@@ -250,6 +258,7 @@ print("NEOMONGO_SAVE_OK");
         return false, result
     end
 
+    -- Report success back to the caller so the UI can refresh locally cached data.
     return true, "Sauvegarde réussie."
 end
 

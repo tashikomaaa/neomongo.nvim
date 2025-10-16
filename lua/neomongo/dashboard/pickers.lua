@@ -1,9 +1,11 @@
+-- Telescope based dashboard that lets users browse databases, collections, and documents.
 local mongo = require("neomongo.dashboard.mongo")
 local save = require("neomongo.dashboard.save")
 local state = require("neomongo.dashboard.state")
 local ui = require("neomongo.dashboard.ui")
 local logger = require("neomongo.log").scope("dashboard.pickers")
 
+-- MongoDB filter snippets offered to the user while crafting queries from the picker prompt.
 local field_templates = {
     {
         key = "equals",
@@ -55,6 +57,7 @@ local field_templates = {
     },
 }
 
+-- Filter helpers that operate at the root level such as `$or` and `$and` groups.
 local root_templates = {
     {
         key = "$or",
@@ -93,6 +96,7 @@ local function collect_fields_from_docs(docs)
         return {}
     end
 
+    -- Use a DFS traversal to record every field that appears inside the collection preview.
     local seen = {}
 
     local function visit(value)
@@ -127,6 +131,7 @@ end
 
 local M = {}
 
+-- Compose the preview lines for Telescope when highlighting a collection entry.
 local function get_collection_preview_lines(uri, db, coll, display_name)
     local entry = mongo.fetch_collection(uri, db, coll)
     local header = ui.make_header_lines(display_name, db, coll, uri)
@@ -149,6 +154,7 @@ local function get_collection_preview_lines(uri, db, coll, display_name)
     return lines, "text"
 end
 
+-- Create a floating window that exposes the collection as a JSON buffer.
 local function open_collection_editor(uri, display_name, db, coll, root_opts)
     logger("open_collection_editor: " .. db .. "." .. coll)
     local entry = mongo.fetch_collection(uri, db, coll)
@@ -198,6 +204,7 @@ local function open_collection_editor(uri, display_name, db, coll, root_opts)
     })
 end
 
+-- Open a single document for editing inside a floating window.
 local function open_document_detail(uri, display_name, db, coll, doc_entry, root_opts)
     save.ensure_autocmd()
     local buf = vim.api.nvim_create_buf(false, true)
@@ -242,15 +249,22 @@ local function open_document_detail(uri, display_name, db, coll, doc_entry, root
     })
 end
 
+-- Launch a Telescope picker that lists documents and supports live filtering.
 local function open_document_picker(uri, display_name, db, coll, root_opts)
     local entry = mongo.fetch_collection(uri, db, coll)
     if entry.error then
-        vim.notify("Neomongo: impossible de charger la collection " .. db .. "." .. coll, vim.log.levels.ERROR)
+        vim.notify(
+            "Neomongo: impossible de charger la collection " .. db .. "." .. coll,
+            vim.log.levels.ERROR
+        )
         return
     end
     local docs = entry.docs or {}
     if vim.tbl_isempty(docs) then
-        vim.notify("Neomongo: collection vide (tu peux exécuter un filtre JSON).", vim.log.levels.WARN)
+        vim.notify(
+            "Neomongo: collection vide (tu peux exécuter un filtre JSON).",
+            vim.log.levels.WARN
+        )
     end
 
     local pickers = require("telescope.pickers")
@@ -263,6 +277,7 @@ local function open_document_picker(uri, display_name, db, coll, root_opts)
     local results = {}
     local field_choices = collect_fields_from_docs(docs)
 
+    -- Refresh Telescope entries whenever the source documents change.
     local function rebuild_results(new_docs)
         docs = new_docs or {}
         results = {}
@@ -279,6 +294,7 @@ local function open_document_picker(uri, display_name, db, coll, root_opts)
         end
     end
 
+    -- Create a finder backed by an in-memory table so we can refresh cheaply.
     local function make_finder()
         return finders.new_table({
             results = results,
@@ -294,6 +310,7 @@ local function open_document_picker(uri, display_name, db, coll, root_opts)
         })
     end
 
+    -- Compute a flat list of autocomplete candidates for the current filter.
     local function build_completion_choices()
         local items = {}
         for _, field in ipairs(field_choices) do
@@ -302,7 +319,7 @@ local function open_document_picker(uri, display_name, db, coll, root_opts)
                     kind = "field",
                     field = field,
                     template = template,
-                    label = string.format('%s • %s', field, template.label),
+                    label = string.format("%s • %s", field, template.label),
                     description = template.description,
                 }
             end
@@ -318,6 +335,7 @@ local function open_document_picker(uri, display_name, db, coll, root_opts)
         return items
     end
 
+    -- Merge the chosen filter template into the JSON currently typed by the user.
     local function apply_completion(prompt_bufnr, choice)
         if not choice then
             return
@@ -334,7 +352,10 @@ local function open_document_picker(uri, display_name, db, coll, root_opts)
         else
             local ok, parsed = pcall(vim.fn.json_decode, trimmed)
             if not ok or type(parsed) ~= "table" or vim.tbl_islist(parsed) then
-                vim.notify("Neomongo: le filtre actuel doit être un objet JSON valide pour l'autocomplétion.", vim.log.levels.ERROR)
+                vim.notify(
+                    "Neomongo: le filtre actuel doit être un objet JSON valide pour l'autocomplétion.",
+                    vim.log.levels.ERROR
+                )
                 return
             end
             decoded = vim.deepcopy(parsed)
@@ -359,10 +380,14 @@ local function open_document_picker(uri, display_name, db, coll, root_opts)
         end
     end
 
+    -- Provide a UI prompt to select one of the available MongoDB filter templates.
     local function autocomplete_filter(prompt_bufnr)
         local choices = build_completion_choices()
         if vim.tbl_isempty(choices) then
-            vim.notify("Neomongo: aucun champ connu pour proposer des suggestions. Exécute d'abord une requête.", vim.log.levels.WARN)
+            vim.notify(
+                "Neomongo: aucun champ connu pour proposer des suggestions. Exécute d'abord une requête.",
+                vim.log.levels.WARN
+            )
             return
         end
         vim.ui.select(choices, {
@@ -382,110 +407,136 @@ local function open_document_picker(uri, display_name, db, coll, root_opts)
 
     local previewer = previewers.new_buffer_previewer({
         title = string.format("%s.%s", db, coll),
-        define_preview = function(self, entry)
-            if not entry or not entry.doc then
+        define_preview = function(self, preview_entry)
+            if not preview_entry or not preview_entry.doc then
                 ui.set_buf_content(self.state.bufnr, { "Sélectionne un document." }, "text")
                 return
             end
-            local lines = ui.document_preview_lines(display_name, uri, db, coll, entry)
+            local lines = ui.document_preview_lines(display_name, uri, db, coll, preview_entry)
             ui.set_buf_content(self.state.bufnr, lines, "json")
             ui.set_json_buffer_options(self.state.bufnr)
         end,
     })
 
     if not M._query_hint_shown then
-        vim.notify("Neomongo: tape un filtre JSON dans le prompt puis presse <C-f> pour exécuter la requête.", vim.log.levels.INFO)
+        vim.notify(
+            "Neomongo: tape un filtre JSON dans le prompt puis presse <C-f> pour exécuter la requête.",
+            vim.log.levels.INFO
+        )
         M._query_hint_shown = true
     end
 
-    pickers.new({}, {
-        prompt_title = string.format("%s.%s — Documents", db, coll),
-        finder = make_finder(),
-        sorter = conf.values.generic_sorter({}),
-        previewer = previewer,
-        layout_strategy = "horizontal",
-        layout_config = {
-            width = 0.95,
-            height = 0.85,
-            preview_width = 0.6,
-        },
-        attach_mappings = function(prompt_bufnr, map)
-            local function execute_query()
-                local picker = action_state.get_current_picker(prompt_bufnr)
-                local line = action_state.get_current_line()
-                line = line or ""
-                local trimmed = line
-                if vim.trim then
-                    trimmed = vim.trim(line)
-                else
-                    trimmed = line:gsub("^%s*(.-)%s*$", "%1")
-                end
-
-                local new_docs
-                if trimmed == "" then
-                    local refreshed = mongo.fetch_collection(uri, db, coll)
-                    if refreshed.error then
-                        vim.notify("Neomongo: impossible de recharger " .. db .. "." .. coll .. " - " .. tostring(refreshed.message), vim.log.levels.ERROR)
-                        return
+    pickers
+        .new({}, {
+            prompt_title = string.format("%s.%s — Documents", db, coll),
+            finder = make_finder(),
+            sorter = conf.values.generic_sorter({}),
+            previewer = previewer,
+            layout_strategy = "horizontal",
+            layout_config = {
+                width = 0.95,
+                height = 0.85,
+                preview_width = 0.6,
+            },
+            attach_mappings = function(prompt_bufnr, map)
+                -- Parse the current JSON filter and refresh the picker results in place.
+                local function execute_query()
+                    local picker = action_state.get_current_picker(prompt_bufnr)
+                    local line = action_state.get_current_line()
+                    line = line or ""
+                    local trimmed
+                    if vim.trim then
+                        trimmed = vim.trim(line)
+                    else
+                        trimmed = line:gsub("^%s*(.-)%s*$", "%1")
                     end
-                    new_docs = refreshed.docs or {}
-                else
-                    local ok, filter = pcall(vim.fn.json_decode, trimmed)
-                    if not ok or type(filter) ~= "table" then
-                        vim.notify("Neomongo: filtre JSON invalide.", vim.log.levels.ERROR)
-                        return
+
+                    local new_docs
+                    if trimmed == "" then
+                        local refreshed = mongo.fetch_collection(uri, db, coll)
+                        if refreshed.error then
+                            vim.notify(
+                                "Neomongo: impossible de recharger "
+                                    .. db
+                                    .. "."
+                                    .. coll
+                                    .. " - "
+                                    .. tostring(refreshed.message),
+                                vim.log.levels.ERROR
+                            )
+                            return
+                        end
+                        new_docs = refreshed.docs or {}
+                    else
+                        local ok, filter = pcall(vim.fn.json_decode, trimmed)
+                        if not ok or type(filter) ~= "table" then
+                            vim.notify("Neomongo: filtre JSON invalide.", vim.log.levels.ERROR)
+                            return
+                        end
+                        local queried, err =
+                            mongo.query_collection(uri, db, coll, filter, { limit = 200 })
+                        if not queried then
+                            vim.notify(
+                                "Neomongo: requête impossible - " .. tostring(err),
+                                vim.log.levels.ERROR
+                            )
+                            return
+                        end
+                        new_docs = queried
                     end
-                    local queried, err = mongo.query_collection(uri, db, coll, filter, { limit = 200 })
-                    if not queried then
-                        vim.notify("Neomongo: requête impossible - " .. tostring(err), vim.log.levels.ERROR)
-                        return
+
+                    rebuild_results(new_docs)
+                    if trimmed == "" then
+                        state.set_docs(uri, db, coll, docs)
+                    else
+                        state.set(uri, db, coll, {
+                            error = false,
+                            message = nil,
+                            docs = docs,
+                            filter = trimmed,
+                        })
                     end
-                    new_docs = queried
+                    picker:refresh(make_finder(), { reset_prompt = false })
+                    if #results > 0 then
+                        picker:set_selection(1)
+                    end
+                    vim.notify(
+                        string.format("Neomongo: %s.%s → %d document(s)", db, coll, #results),
+                        vim.log.levels.INFO
+                    )
                 end
 
-                rebuild_results(new_docs)
-                if trimmed == "" then
-                    state.set_docs(uri, db, coll, docs)
-                else
-                    state.set(uri, db, coll, {
-                        error = false,
-                        message = nil,
-                        docs = docs,
-                        filter = trimmed,
-                    })
-                end
-                picker:refresh(make_finder(), { reset_prompt = false })
-                if #results > 0 then
-                    picker:set_selection(1)
-                end
-                vim.notify(string.format("Neomongo: %s.%s → %d document(s)", db, coll, #results), vim.log.levels.INFO)
-            end
+                -- Quickly jump from the picker into the editable collection buffer.
+                map("i", "<C-e>", function()
+                    actions.close(prompt_bufnr)
+                    open_collection_editor(uri, display_name, db, coll, root_opts)
+                end)
+                map("n", "<C-e>", function()
+                    actions.close(prompt_bufnr)
+                    open_collection_editor(uri, display_name, db, coll, root_opts)
+                end)
+                -- <C-f> runs the current JSON query without leaving Telescope.
+                map("i", "<C-f>", execute_query)
+                map("n", "<C-f>", execute_query)
+                -- <C-Space> opens the interactive filter completion selector.
+                map("i", "<C-Space>", autocomplete_filter)
+                map("n", "<C-Space>", autocomplete_filter)
 
-            map("i", "<C-e>", function()
-                actions.close(prompt_bufnr)
-                open_collection_editor(uri, display_name, db, coll, root_opts)
-            end)
-            map("n", "<C-e>", function()
-                actions.close(prompt_bufnr)
-                open_collection_editor(uri, display_name, db, coll, root_opts)
-            end)
-            map("i", "<C-f>", execute_query)
-            map("n", "<C-f>", execute_query)
-            map("i", "<C-Space>", autocomplete_filter)
-            map("n", "<C-Space>", autocomplete_filter)
-
-            actions.select_default:replace(function()
-                local doc_entry = action_state.get_selected_entry()
-                actions.close(prompt_bufnr)
-                if doc_entry then
-                    open_document_detail(uri, display_name, db, coll, doc_entry, root_opts)
-                end
-            end)
-            return true
-        end,
-    }):find()
+                -- Replace default selection behaviour to open the document viewer window.
+                actions.select_default:replace(function()
+                    local doc_entry = action_state.get_selected_entry()
+                    actions.close(prompt_bufnr)
+                    if doc_entry then
+                        open_document_detail(uri, display_name, db, coll, doc_entry, root_opts)
+                    end
+                end)
+                return true
+            end,
+        })
+        :find()
 end
 
+-- Flatten the database and collection hierarchy into Telescope-friendly entries.
 local function build_results(uri, dbs)
     local results = {}
     for _, db in ipairs(dbs) do
@@ -504,6 +555,7 @@ local function build_results(uri, dbs)
     return results
 end
 
+-- Entry point used by the public API to open the dashboard picker.
 function M.open(opts)
     local pickers = require("telescope.pickers")
     local finders = require("telescope.finders")
@@ -517,7 +569,12 @@ function M.open(opts)
     local root_opts
     if type(opts) == "table" then
         uri = opts.uri or opts[1]
-        display_name = opts.display_name or opts.connection_name or opts.name or opts.label or opts.title or uri
+        display_name = opts.display_name
+            or opts.connection_name
+            or opts.name
+            or opts.label
+            or opts.title
+            or uri
         root_opts = vim.deepcopy(opts)
     end
 
@@ -561,54 +618,60 @@ function M.open(opts)
                 return
             end
 
-            local lines, filetype = get_collection_preview_lines(uri, entry.db, entry.coll, display_name)
+            local lines, filetype =
+                get_collection_preview_lines(uri, entry.db, entry.coll, display_name)
             ui.set_buf_content(self.state.bufnr, lines, filetype)
         end,
     })
 
-    pickers.new({}, {
-        prompt_title = "MongoDB Databases & Collections",
-        finder = finders.new_table({
-            results = results,
-            entry_maker = function(entry)
-                return {
-                    value = entry.value,
-                    display = entry.display,
-                    ordinal = entry.display,
-                    type = entry.type,
-                    db = entry.db,
-                    coll = entry.coll,
-                }
+    pickers
+        .new({}, {
+            prompt_title = "MongoDB Databases & Collections",
+            finder = finders.new_table({
+                results = results,
+                entry_maker = function(entry)
+                    return {
+                        value = entry.value,
+                        display = entry.display,
+                        ordinal = entry.display,
+                        type = entry.type,
+                        db = entry.db,
+                        coll = entry.coll,
+                    }
+                end,
+            }),
+            sorter = conf.values.generic_sorter({}),
+            previewer = previewer,
+            layout_strategy = "horizontal",
+            layout_config = {
+                width = 0.95,
+                height = 0.85,
+                preview_width = 0.55,
+            },
+            attach_mappings = function(prompt_bufnr, map)
+                -- Allow opening the editable floating window from the root picker as well.
+                local function open_editor()
+                    local entry = action_state.get_selected_entry()
+                    actions.close(prompt_bufnr)
+                    if entry and entry.type == "collection" then
+                        open_collection_editor(uri, display_name, entry.db, entry.coll, root_opts)
+                    end
+                end
+                -- Reuse <C-e> to jump from database selection to the collection editor.
+                map("i", "<C-e>", open_editor)
+                map("n", "<C-e>", open_editor)
+                -- Hitting <CR> opens the document oriented picker for the selected collection.
+                actions.select_default:replace(function()
+                    actions.close(prompt_bufnr)
+                    local entry = action_state.get_selected_entry()
+                    if entry and entry.type == "collection" then
+                        open_document_picker(uri, display_name, entry.db, entry.coll, root_opts)
+                    end
+                end)
+                return true
             end,
-        }),
-        sorter = conf.values.generic_sorter({}),
-        previewer = previewer,
-        layout_strategy = "horizontal",
-        layout_config = {
-            width = 0.95,
-            height = 0.85,
-            preview_width = 0.55,
-        },
-        attach_mappings = function(prompt_bufnr, map)
-            local function open_editor()
-                local entry = action_state.get_selected_entry()
-                actions.close(prompt_bufnr)
-                if entry and entry.type == "collection" then
-                    open_collection_editor(uri, display_name, entry.db, entry.coll, root_opts)
-                end
-            end
-            map("i", "<C-e>", open_editor)
-            map("n", "<C-e>", open_editor)
-            actions.select_default:replace(function()
-                actions.close(prompt_bufnr)
-                local entry = action_state.get_selected_entry()
-                if entry and entry.type == "collection" then
-                    open_document_picker(uri, display_name, entry.db, entry.coll, root_opts)
-                end
-            end)
-            return true
-        end,
-    }):find()
+        })
+        :find()
 end
 
 return M

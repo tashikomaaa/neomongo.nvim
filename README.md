@@ -160,6 +160,13 @@ Issues, ideas, and pull requests are welcome! Please open an issue to discuss la
 3. Commit your changes
 4. Open a pull request 🚀
 
+## 🧹 Development Workflow
+
+- `make lint` runs [Luacheck](https://github.com/mpeterv/luacheck) against the `lua/` directory to catch undefined globals and other common mistakes.
+- `make format` tidies the Lua sources with [StyLua](https://github.com/JohnnyMorganz/StyLua); use `make format-check` to verify formatting without modifying files.
+- Continuous integration runs two separate GitHub Actions (`Lua Lint` and `Lua Formatting`) on pushes and pull requests to guarantee consistent style across contributions.
+- The linter and formatter configurations live in `.luacheckrc` and `stylua.toml` respectively—feel free to tweak them if new rules are needed.
+
 ---
 
 ## 📄 License

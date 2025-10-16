@@ -1,5 +1,7 @@
+-- Configuration helpers that keep track of saved connections and user preferences.
 local M = {}
 
+-- Template used to bootstrap a user managed connections file.
 local default_template = [[return {
     { name = "Local", uri = "mongodb://localhost:27017" },
     -- Ajoute ici d'autres connexions, par exemple :
@@ -8,14 +10,17 @@ local default_template = [[return {
 ]]
 
 local function notify(msg, level)
+    -- Uniform notification helper that prefixes every message for clarity.
     pcall(vim.notify, "Neomongo: " .. msg, level or vim.log.levels.INFO)
 end
 
 function M.default_connections_file()
+    -- Prefer the user's Neovim config directory so the file lives outside the plugin directory.
     return vim.fn.stdpath("config") .. "/neomongo_connections.lua"
 end
 
 local function ensure_dir(path)
+    -- Create missing parent directories before trying to materialize the file itself.
     local dir = vim.fn.fnamemodify(path, ":h")
     if dir and dir ~= "" then
         vim.fn.mkdir(dir, "p")
@@ -23,6 +28,7 @@ local function ensure_dir(path)
 end
 
 function M.ensure_connections_file(path)
+    -- Lazily create the connections file if it does not exist yet.
     if vim.loop.fs_stat(path) then
         return
     end
@@ -38,9 +44,13 @@ function M.ensure_connections_file(path)
 end
 
 function M.load_connections(path)
+    -- Load the Lua table of connections while gracefully handling syntax errors.
     local ok, data = pcall(dofile, path)
     if not ok then
-        notify("erreur de lecture du fichier de connexions: " .. tostring(data), vim.log.levels.ERROR)
+        notify(
+            "erreur de lecture du fichier de connexions: " .. tostring(data),
+            vim.log.levels.ERROR
+        )
         return {}
     end
     if type(data) ~= "table" then
@@ -51,6 +61,7 @@ function M.load_connections(path)
 end
 
 local function normalize_connection(conn)
+    -- Convert user supplied connection structures into a consistent internal shape.
     if type(conn) ~= "table" then
         return nil
     end
@@ -67,6 +78,7 @@ local function normalize_connection(conn)
 end
 
 local function format_choice(choice)
+    -- Present a human readable summary when showing connection candidates in the UI.
     if not choice then
         return "?"
     end
@@ -79,6 +91,7 @@ end
 
 function M.select_connection(opts, callback)
     opts = opts or {}
+    -- Without a callback there is nothing useful to do; fail silently.
     if type(callback) ~= "function" then
         return
     end
@@ -124,6 +137,7 @@ function M.select_connection(opts, callback)
         prompt = "Sélectionne une connexion MongoDB",
         format_item = format_choice,
     }, function(choice)
+        -- Always extend the raw entry so we respect additional user-defined metadata.
         if not choice then
             return
         end

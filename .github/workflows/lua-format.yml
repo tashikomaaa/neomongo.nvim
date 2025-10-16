@@ -1,0 +1,21 @@
+name: Lua Formatting
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  stylua:
+    name: Check Formatting with StyLua
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install StyLua
+        uses: JohnnyMorganz/stylua-action@v3
+        with:
+          version: latest
+          args: --check lua
